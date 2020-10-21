@@ -7,15 +7,15 @@ import { logger } from './../main';
 export let ws: WebSocket; // Global websocket client
 export let idGen: Generator<string, never, never>; // Id Generator for websocket communication
 
-export const connectWS = (): void => {
-  if (ws) {
-    return;
+export const connectWS = (global = true): WebSocket => {
+  if (global && ws) {
+    return ws;
   }
 
   const uri = getUri();
-
+  let _ws: WebSocket;
   try {
-    ws = new WebSocket(uri);
+    _ws = new WebSocket(uri);
     idGen = idGenerator();
   } catch (error) {
     logger.error('error connecting websocket', {
@@ -26,17 +26,22 @@ export const connectWS = (): void => {
     process.exit(1);
   }
 
-  ws.onerror = handleErr;
-  ws.onopen = handleOpen;
-  ws.onmessage = handleMessage;
-  ws.onclose = (event: WebSocket.CloseEvent) => {
-    logger.info('websocket closed', {
-      code: event.code,
-      reason: event.reason,
-      wasClean: event.wasClean,
-    });
-    reconnectWS();
-  };
+  _ws.onerror = handleErr;
+  _ws.onopen = handleOpen;
+  _ws.onmessage = handleMessage;
+
+  if (global) {
+    _ws.onclose = (event: WebSocket.CloseEvent) => {
+      logger.info('websocket closed', {
+        code: event.code,
+        reason: event.reason,
+        wasClean: event.wasClean,
+      });
+      reconnectWS();
+    };
+    ws = _ws;
+  }
+  return _ws;
 };
 
 export const closeWS = (): void => {

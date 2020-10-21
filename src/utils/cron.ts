@@ -3,10 +3,12 @@ import { bot, logger } from '../main';
 import { Channel } from './channel';
 import { IGameDocument } from './../database/games/games.types';
 import { UserModel } from './../database/users/users.model';
-import { getGame } from '../crackwatch/methods';
+import { getGames } from '../crackwatch/methods';
+import { handleUnsub } from './utils';
 import { setInterval } from 'timers';
 
 const schedule = Number.parseInt(process.env.CRACKWATCH_SCHEDULE) ?? 60 * 60 * 1000; // Default 1h
+export let TASK_INTERVAL: NodeJS.Timeout;
 
 async function task(): Promise<void> {
   logger.info('cron: scheduled task started');
@@ -15,11 +17,12 @@ async function task(): Promise<void> {
 
   logger.info(`cron: games to update ${games.length}`);
 
-  games.forEach(async (game) => {
-    const chnl: Channel<IGameDocument> = new Channel();
-    getGame(game.slug, chnl);
-    const newGame = await chnl.recv();
+  const slugs = games.map((game) => game.slug);
+  const chnl: Channel<IGameDocument> = new Channel();
+  getGames(slugs, chnl);
 
+  chnl.forEach(async (newGame) => {
+    const game = games.find((g) => g.slug == newGame.slug);
     const justReleased =
       newGame.releaseDate.getTime() <= Date.now() && newGame.releaseDate.getTime() >= game.lastUpdated.getTime();
 
@@ -31,14 +34,16 @@ async function task(): Promise<void> {
       users.forEach(async (user, i) => {
         await new Promise((r) => setTimeout(r, 20 * i + 1));
 
-        let text = `${bot.context.i18n.t('released', { gameName: game.title, link: game.links?.['steam'] })}`;
-
+        let text = `<b>${game.title}</b> has been released!`;
+        if (game.links?.['steam']) {
+          text += `\nCheck it out on <a href="${game.links['steam']}">steam</a>`;
+        }
         // Unsubscribe user
         if (newGame.isCracked()) {
-          user.subscriptions = user.subscriptions.filter((g) => g.id != game.id);
-          user.save();
-
-          text = game.getGameCard();
+          if (!handleUnsub({ state: { user } }, newGame.id)) {
+            logger.error(`cron: Error saving user ${user.firstName}`);
+          }
+          text = newGame.getGameCard();
         }
         // Notify user
         sendNotification(user.userId, text);
@@ -60,7 +65,10 @@ async function getGamesToUpdate(): Promise<Array<IGameDocument>> {
   return games.filter((g, i) => games.indexOf(g) === i && !g.isCracked());
 }
 
-export async function startTask(): Promise<void> {
+export async function startTask(run = false): Promise<void> {
   logger.info('cron: creating background task');
-  setInterval(task, schedule);
+  if (run) {
+    task();
+  }
+  TASK_INTERVAL = setInterval(task, schedule);
 }
